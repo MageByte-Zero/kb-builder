@@ -8,17 +8,18 @@ kb-builder 默认使用本地模型，不依赖外部 API，开箱即用。
 
 ---
 
-## 默认模型：mxbai-embed-large-v1
+## 默认模型：paraphrase-multilingual-MiniLM-L12-v2
 
 | 属性 | 说明 |
 |------|------|
-| 模型 | mxbai-embed-large-v1 |
+| 模型 | paraphrase-multilingual-MiniLM-L12-v2 |
 | 类型 | 本地运行，无需 API Key |
-| 向量维度 | 1024 |
-| 首次下载 | ~500MB（自动下载到 HuggingFace 缓存目录） |
+| 向量维度 | 384 |
+| 支持语言 | 50+ 语言（含中英文），多语言语义对齐 |
+| 首次下载 | ~420MB（自动下载到 HuggingFace 缓存目录） |
 | 后续使用 | 完全离线，无网络依赖 |
 
-该模型在 MTEB（文本嵌入基准测试）中表现优异，尤其在中英文混合场景下稳定可靠。它是 kb-builder 的默认选择。
+该模型由 sentence-transformers 官方维护，在中文技术文档检索场景表现稳定。384 维向量在保证检索质量的同时，索引体积和搜索速度更优。
 
 ---
 
@@ -52,10 +53,10 @@ kb-builder 默认使用本地模型，不依赖外部 API，开箱即用。
 
 ```yaml
 # 使用默认模型（本地）
-embedding_model: "mxbai-embed-large-v1"
+embedding_model: "sentence-transformers/paraphrase-multilingual-MiniLM-L12-v2"
 
-# 切换到 OpenAI
-embedding_model: "text-embedding-3-small"
+# 切换到 OpenAI（v2.0 支持）
+embedding_model: "openai/text-embedding-3-small"
 openai_api_key: "sk-xxxx"         # 需填入有效 API Key
 openai_base_url: "https://api.openai.com/v1"  # 可选，支持代理中转
 ```
@@ -66,7 +67,8 @@ openai_base_url: "https://api.openai.com/v1"  # 可选，支持代理中转
 
 ```bash
 source .venv/bin/activate
-python index.py --full
+cd scripts
+python index.py index --full
 ```
 
 ### 第三步：验证
@@ -83,7 +85,7 @@ python search.py "你的查询关键词"
 
 ### 问题
 
-首次下载 `mxbai-embed-large-v1` 时，HuggingFace 会自动从 huggingface.co 下载。在中国大陆可能遇到连接超时或下载极慢。
+首次下载 `paraphrase-multilingual-MiniLM-L12-v2` 时，HuggingFace 会自动从 huggingface.co 下载。在中国大陆可能遇到连接超时或下载极慢。
 
 ### 解决方案
 
