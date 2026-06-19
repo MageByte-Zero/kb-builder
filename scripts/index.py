@@ -257,3 +257,268 @@ def chunk_document(doc: Document, content_type: str, max_size: int = 800) -> Lis
         return chunk_brief(doc, max_size=max_size)
     else:
         return chunk_article(doc, max_size=max_size)
+
+
+# ── RAGIndexer ──────────────────────────────────────────────
+
+import json
+import time
+import hashlib
+import chromadb
+from chromadb.utils import embedding_functions
+
+
+class RAGIndexer:
+    """管理 Chroma 向量库：初始化、索引、检索"""
+
+    def __init__(self, config: dict):
+        self.config = config
+        idx_cfg = config["index"]
+
+        persist_dir = os.path.expanduser(idx_cfg["persist_dir"])
+        os.makedirs(persist_dir, exist_ok=True)
+
+        model_name = idx_cfg.get("embedding_model", "sentence-transformers/mxbai-embed-large-v1")
+        device = idx_cfg.get("device", "cpu")
+
+        self.embedding_fn = embedding_functions.SentenceTransformerEmbeddingFunction(
+            model_name=model_name,
+            device=device,
+            normalize_embeddings=True,
+        )
+        self.client = chromadb.PersistentClient(path=persist_dir)
+        self.collection_name = idx_cfg.get("collection_name", "unified_kb")
+
+        self.collection = self.client.get_or_create_collection(
+            name=self.collection_name,
+            embedding_function=self.embedding_fn,
+            metadata={"hnsw:space": "cosine"},
+        )
+
+    def index_documents(self, chunks: List[Document], source_name: str, content_type: str):
+        """批量写入 chunks 到 Chroma"""
+        if not chunks:
+            return 0
+
+        ids = []
+        documents = []
+        metadatas = []
+
+        for i, c in enumerate(chunks):
+            uniq = f"{source_name}:{c.metadata.get('source_path', '')}:{i}"
+            chunk_id = hashlib.md5(uniq.encode()).hexdigest()[:16]
+            ids.append(chunk_id)
+            documents.append(c.content)
+            meta = {
+                "source_path": c.metadata.get("source_path", "")[:512],
+                "source_name": source_name,
+                "content_type": content_type,
+                "topic": c.metadata.get("topic", "")[:128],
+                "heading": c.metadata.get("heading", "")[:256],
+                "file_name": c.metadata.get("file_name", "")[:256],
+                "file_mtime": c.metadata.get("file_mtime", ""),
+                "word_count": str(len(c.content)),
+            }
+            metadatas.append({k: str(v)[:512] for k, v in meta.items()})
+
+        batch_size = 100
+        total = 0
+        for i in range(0, len(ids), batch_size):
+            end = min(i + batch_size, len(ids))
+            self.collection.upsert(
+                ids=ids[i:end],
+                documents=documents[i:end],
+                metadatas=metadatas[i:end],
+            )
+            total += (end - i)
+        return total
+
+    def index_all(self, full: bool = False):
+        """遍历 config 中的所有内容源，执行索引"""
+        sources = self.config.get("content_sources", [])
+        if not sources:
+            print("[ERROR] config.yaml 中未声明任何 content_sources")
+            sys.exit(1)
+
+        chunking = self.config.get("chunking", {})
+        article_max = chunking.get("article_max_size", 800)
+        brief_max = chunking.get("brief_max_size", 600)
+
+        total_files = 0
+        total_chunks = 0
+
+        for source in sources:
+            if not source.get("enabled", False):
+                print(f"[SKIP] {source['name']} (disabled)")
+                continue
+
+            path = os.path.expanduser(source["path"])
+            name = source["name"]
+            print(f"\n{'='*60}")
+            print(f"[索引] {name} ← {path}")
+            print(f"{'='*60}")
+
+            docs = load_markdown_files(path)
+            print(f"  扫描到 {len(docs)} 个 .md 文件")
+
+            content_type = _determine_content_type(path)
+            max_size = brief_max if content_type == "brief" else article_max
+
+            all_chunks = []
+            for doc in docs:
+                chunks = chunk_document(doc, content_type, max_size=max_size)
+                all_chunks.extend(chunks)
+
+            print(f"  分块完成：{len(docs)} 篇文档 → {len(all_chunks)} chunks")
+
+            written = self.index_documents(all_chunks, name, content_type)
+            print(f"  写入 Chroma：{written} chunks")
+
+            total_files += len(docs)
+            total_chunks += len(all_chunks)
+
+        print(f"\n{'='*60}")
+        print(f"[完成] 总计：{total_files} 篇文档 → {total_chunks} chunks")
+        print(f"  Collection: {self.collection_name}")
+        print(f"  Total vectors: {self.collection.count()}")
+        print(f"{'='*60}")
+
+        return {"total_files": total_files, "total_chunks": total_chunks}
+
+    def search(self, query: str, top_k: int = 5,
+               content_type: str = "all", source: str = "all") -> List[dict]:
+        """检索，支持按 content_type 和 source 过滤"""
+        where_filter = None
+        conditions = []
+        if content_type and content_type != "all":
+            conditions.append({"content_type": content_type})
+        if source and source != "all":
+            conditions.append({"source_name": source})
+
+        if len(conditions) == 1:
+            where_filter = conditions[0]
+        elif len(conditions) > 1:
+            where_filter = {"$and": conditions}
+
+        try:
+            results = self.collection.query(
+                query_texts=[query],
+                n_results=top_k,
+                where=where_filter,
+                include=["documents", "metadatas", "distances"],
+            )
+        except Exception as e:
+            print(f"[WARN] 检索出错: {e}")
+            return []
+
+        hits = []
+        if not results.get("ids") or not results["ids"][0]:
+            return hits
+
+        for i in range(len(results["ids"][0])):
+            meta = results["metadatas"][0][i] if results.get("metadatas") and results["metadatas"][0] else {}
+            hits.append({
+                "content": results["documents"][0][i] if results.get("documents") and results["documents"][0] else "",
+                "source": meta.get("source_path", ""),
+                "source_name": meta.get("source_name", ""),
+                "content_type": meta.get("content_type", ""),
+                "heading": meta.get("heading", ""),
+                "topic": meta.get("topic", ""),
+                "distance": results["distances"][0][i] if results.get("distances") and results["distances"][0] else 1.0,
+            })
+        return hits
+
+    def get_topics(self) -> List[dict]:
+        """统计各 topic 的 chunk 分布"""
+        all_meta = self.collection.get(include=["metadatas"])
+        topic_counts = {}
+        for m in all_meta.get("metadatas", []):
+            if m:
+                topic = m.get("topic", "unknown")
+                source = m.get("source_name", "unknown")
+                key = f"{source}/{topic}"
+                topic_counts[key] = topic_counts.get(key, 0) + 1
+        return [{"key": k, "count": v} for k, v in sorted(
+            topic_counts.items(), key=lambda x: -x[1])]
+
+    def get_stats(self) -> dict:
+        """返回索引统计"""
+        return {
+            "collection": self.collection_name,
+            "total_vectors": self.collection.count(),
+            "sources": self.config.get("content_sources", []),
+        }
+
+
+# ── CLI Entry Point ────────────────────────────────────────
+
+def main():
+    import argparse
+
+    parser = argparse.ArgumentParser(description="KB Builder — 知识库索引工具")
+    sub = parser.add_subparsers(dest="command")
+
+    idx_parser = sub.add_parser("index", help="索引内容到向量库")
+    idx_parser.add_argument("--config", default="config.yaml", help="配置文件路径")
+    idx_parser.add_argument("--full", action="store_true", help="全量重建索引")
+
+    search_parser = sub.add_parser("search", help="命令行检索")
+    search_parser.add_argument("query", help="检索查询")
+    search_parser.add_argument("--config", default="config.yaml", help="配置文件路径")
+    search_parser.add_argument("--top-k", type=int, default=5)
+    search_parser.add_argument("--type", default="all", help="内容类型过滤")
+    search_parser.add_argument("--source", default="all", help="来源过滤")
+
+    sub.add_parser("stats", help="查看索引状态")
+    sub.add_parser("topics", help="列出所有主题")
+
+    args = parser.parse_args()
+
+    if not args.command:
+        parser.print_help()
+        return
+
+    # load_config raises ConfigError if config missing
+    try:
+        config = load_config(args.config)
+    except ConfigError as e:
+        print(f"[ERROR] {e}")
+        sys.exit(1)
+
+    os.chdir(Path(args.config).parent)
+
+    if args.command == "index":
+        indexer = RAGIndexer(config)
+        indexer.index_all(full=args.full)
+
+    elif args.command == "search":
+        indexer = RAGIndexer(config)
+        hits = indexer.search(args.query, top_k=args.top_k,
+                              content_type=args.type, source=args.source)
+        if not hits:
+            print("未找到相关结果。")
+            return
+        print(f"\n📖 查询: {args.query}\n")
+        print(f"📝 Top-{len(hits)} 结果:\n")
+        for i, h in enumerate(hits, 1):
+            relevance = max(0, 1 - h["distance"])
+            print(f"[{i}] {h['source']} > {h.get('heading', '')} "
+                  f"(相关度: {relevance:.1%})")
+            print(f"    {h['content'][:200]}...\n")
+
+    elif args.command == "stats":
+        indexer = RAGIndexer(config)
+        stats = indexer.get_stats()
+        print(f"Collection: {stats['collection']}")
+        print(f"Total vectors: {stats['total_vectors']}")
+
+    elif args.command == "topics":
+        indexer = RAGIndexer(config)
+        topics = indexer.get_topics()
+        print(f"\n📚 知识库主题分布:\n")
+        for t in topics:
+            print(f"  {t['key']}: {t['count']} chunks")
+
+
+if __name__ == "__main__":
+    main()
