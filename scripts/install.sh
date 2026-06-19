@@ -81,8 +81,8 @@ if [[ "$CLONE_KB" =~ ^[Yy]$ ]]; then
         echo -e "  ${YELLOW}⚠${NC}  $KB_DIR 已存在，跳过克隆"
         echo "    如需更新内容: cd $KB_DIR && git pull"
     else
-        echo "  正在克隆 https://github.com/MageByte/awesome-ai-kb.git ..."
-        if git clone https://github.com/MageByte/awesome-ai-kb.git "$KB_DIR" 2>/dev/null; then
+        echo "  正在克隆 https://github.com/MageByte-Zero/awesome-ai-kb.git ..."
+        if git clone https://github.com/MageByte-Zero/awesome-ai-kb.git "$KB_DIR" 2>/dev/null; then
             echo -e "  ${GREEN}✓${NC} 内容已克隆到 $KB_DIR"
         else
             echo -e "  ${YELLOW}⚠${NC}  克隆失败（仓库可能尚未公开）。"
