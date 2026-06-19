@@ -13,13 +13,13 @@ index:
   collection_name: unified_kb
   persist_dir: ./chroma_db
   embedding_model: sentence-transformers/mxbai-embed-large-v1
-  # embedding_model: openai/text-embedding-3-small  # 备选，需设置 OPENAI_API_KEY
+  # embedding_model: openai/text-embedding-3-small  # 备选（v2.0 支持），需设置 OPENAI_API_KEY
   device: cpu
 
 chunking:
   article_max_size: 800
   brief_max_size: 600
-  chunk_overlap: 80
+  # chunk_overlap: 80  # TODO: v2.0 滑动窗口重叠，暂未启用
 
 mcp:
   default_top_k: 5

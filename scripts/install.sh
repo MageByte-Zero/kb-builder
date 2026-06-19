@@ -60,7 +60,7 @@ echo -e "  ${GREEN}✓${NC} 虚拟环境已激活"
 pip install --quiet --upgrade pip 2>/dev/null
 
 echo "  安装 chromadb fastmcp sentence-transformers pyyaml ..."
-pip install --quiet chromadb "fastmcp>=2.0" sentence-transformers pyyaml
+pip install --quiet chromadb "fastmcp>=2.0" sentence-transformers pyyaml mcp
 
 echo -e "  ${GREEN}✓${NC} 依赖安装完成"
 echo ""
@@ -144,7 +144,7 @@ index:
 chunking:
   article_max_size: 800
   brief_max_size: 600
-  chunk_overlap: 80
+  # chunk_overlap: 80  # TODO: v2.0 滑动窗口重叠，暂未启用
 
 mcp:
   default_top_k: 5
@@ -191,6 +191,7 @@ import json
 
 settings_path = "$SETTINGS_FILE"
 server_path = "$SERVER_PATH"
+venv_python = "$SKILL_DIR/.venv/bin/python3"
 config_path = "$SCRIPT_DIR/config.yaml"
 
 with open(settings_path, 'r') as f:
@@ -200,7 +201,7 @@ if 'mcpServers' not in settings:
     settings['mcpServers'] = {}
 
 settings['mcpServers']['ai-knowledge-base'] = {
-    "command": "python3",
+    "command": venv_python,
     "args": [server_path],
     "env": {
         "KB_CONFIG_PATH": config_path
