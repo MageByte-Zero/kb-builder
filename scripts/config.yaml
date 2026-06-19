@@ -1,18 +1,15 @@
-# kb-builder/scripts/config.yaml
+# KB Builder 配置文件
 # 编辑此文件声明你的内容源
 
 content_sources:
-  - path: ~/awesome-ai-kb
+  - path: /Users/magebte/Documents/GitHub/awesome-ai-kb
     name: magebyte-ai-kb
     enabled: true
-  # - path: ~/your-own-content
-  #   name: my-kb
-  #   enabled: false
 
 index:
   collection_name: unified_kb
   persist_dir: ./chroma_db
-  embedding_model: sentence-transformers/mxbai-embed-large-v1
+  embedding_model: sentence-transformers/paraphrase-multilingual-MiniLM-L12-v2
   # embedding_model: openai/text-embedding-3-small  # 备选（v2.0 支持），需设置 OPENAI_API_KEY
   device: cpu
 

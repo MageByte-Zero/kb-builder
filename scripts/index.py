@@ -277,7 +277,7 @@ class RAGIndexer:
         persist_dir = os.path.expanduser(idx_cfg["persist_dir"])
         os.makedirs(persist_dir, exist_ok=True)
 
-        model_name = idx_cfg.get("embedding_model", "sentence-transformers/mxbai-embed-large-v1")
+        model_name = idx_cfg.get("embedding_model", "sentence-transformers/paraphrase-multilingual-MiniLM-L12-v2")
         device = idx_cfg.get("device", "cpu")
 
         try:

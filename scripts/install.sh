@@ -137,8 +137,8 @@ cat >> "$CONFIG_FILE" << 'EOF'
 index:
   collection_name: unified_kb
   persist_dir: ./chroma_db
-  embedding_model: sentence-transformers/mxbai-embed-large-v1
-  # embedding_model: openai/text-embedding-3-small  # 备选，需设置 OPENAI_API_KEY
+  embedding_model: sentence-transformers/paraphrase-multilingual-MiniLM-L12-v2
+  # embedding_model: openai/text-embedding-3-small  # 备选（v2.0 支持），需设置 OPENAI_API_KEY
   device: cpu
 
 chunking:

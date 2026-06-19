@@ -3,3 +3,5 @@ fastmcp>=2.0
 sentence-transformers>=2.7.0
 pyyaml>=6.0
 mcp>=1.0
+numpy<2
+transformers==4.41.2

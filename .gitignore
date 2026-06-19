@@ -1,0 +1,20 @@
+# Python virtual environment
+.venv/
+
+# ChromaDB persistent storage
+scripts/chroma_db/
+
+# Python cache
+__pycache__/
+*.pyc
+*.pyo
+
+# OS files
+.DS_Store
+Thumbs.db
+
+# IDE
+.idea/
+.vscode/
+*.swp
+*.swo
