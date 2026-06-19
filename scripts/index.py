@@ -1,14 +1,19 @@
 #!/usr/bin/env python3
 """KB Builder — 索引管道：加载 Markdown → 分块 → embedding → Chroma"""
 
+import hashlib
+import json
 import os
 import re
 import sys
+import time
 from pathlib import Path
 from typing import List, Dict
 from dataclasses import dataclass, field
 
+import chromadb
 import yaml
+from chromadb.utils import embedding_functions
 
 # 显式跳过的隐藏目录
 _SKIP_DIRS = {".git", ".github", "node_modules", "__pycache__", ".venv", ".idea"}
@@ -261,12 +266,6 @@ def chunk_document(doc: Document, content_type: str, max_size: int = 800) -> Lis
 
 # ── RAGIndexer ──────────────────────────────────────────────
 
-import json
-import time
-import hashlib
-import chromadb
-from chromadb.utils import embedding_functions
-
 
 class RAGIndexer:
     """管理 Chroma 向量库：初始化、索引、检索"""
@@ -281,12 +280,28 @@ class RAGIndexer:
         model_name = idx_cfg.get("embedding_model", "sentence-transformers/mxbai-embed-large-v1")
         device = idx_cfg.get("device", "cpu")
 
-        self.embedding_fn = embedding_functions.SentenceTransformerEmbeddingFunction(
-            model_name=model_name,
-            device=device,
-            normalize_embeddings=True,
-        )
-        self.client = chromadb.PersistentClient(path=persist_dir)
+        try:
+            self.embedding_fn = embedding_functions.SentenceTransformerEmbeddingFunction(
+                model_name=model_name,
+                device=device,
+                normalize_embeddings=True,
+            )
+        except Exception as e:
+            raise RuntimeError(
+                f"无法加载 embedding 模型 '{model_name}'。\n"
+                f"请检查网络连接（首次需从 HuggingFace 下载 ~500MB），"
+                f"或尝试设置 HF_ENDPOINT=https://hf-mirror.com\n"
+                f"原始错误: {e}"
+            )
+
+        try:
+            self.client = chromadb.PersistentClient(path=persist_dir)
+        except Exception as e:
+            raise RuntimeError(
+                f"无法打开 Chroma 数据库: {persist_dir}\n"
+                f"请检查路径权限和磁盘空间。\n原始错误: {e}"
+            )
+
         self.collection_name = idx_cfg.get("collection_name", "unified_kb")
 
         self.collection = self.client.get_or_create_collection(
@@ -306,7 +321,7 @@ class RAGIndexer:
 
         for i, c in enumerate(chunks):
             uniq = f"{source_name}:{c.metadata.get('source_path', '')}:{i}"
-            chunk_id = hashlib.md5(uniq.encode()).hexdigest()[:16]
+            chunk_id = hashlib.md5(uniq.encode()).hexdigest()
             ids.append(chunk_id)
             documents.append(c.content)
             meta = {
@@ -334,11 +349,25 @@ class RAGIndexer:
         return total
 
     def index_all(self, full: bool = False):
-        """遍历 config 中的所有内容源，执行索引"""
+        """遍历 config 中的所有内容源，执行索引。
+        full=True 时先清空 collection 再重建。"""
         sources = self.config.get("content_sources", [])
         if not sources:
             print("[ERROR] config.yaml 中未声明任何 content_sources")
-            sys.exit(1)
+            return None
+
+        # 全量重建：删除旧 collection 再创建
+        if full:
+            print("[INFO] 全量重建模式 — 清空现有索引...")
+            try:
+                self.client.delete_collection(self.collection_name)
+            except Exception:
+                pass  # collection 可能不存在
+            self.collection = self.client.get_or_create_collection(
+                name=self.collection_name,
+                embedding_function=self.embedding_fn,
+                metadata={"hnsw:space": "cosine"},
+            )
 
         chunking = self.config.get("chunking", {})
         article_max = chunking.get("article_max_size", 800)
@@ -428,9 +457,9 @@ class RAGIndexer:
             })
         return hits
 
-    def get_topics(self) -> List[dict]:
-        """统计各 topic 的 chunk 分布"""
-        all_meta = self.collection.get(include=["metadatas"])
+    def get_topics(self, limit: int = 5000) -> List[dict]:
+        """统计各 topic 的 chunk 分布（采样前 limit 条，默认 5000）"""
+        all_meta = self.collection.get(include=["metadatas"], limit=limit)
         topic_counts = {}
         for m in all_meta.get("metadatas", []):
             if m:
@@ -469,8 +498,11 @@ def main():
     search_parser.add_argument("--type", default="all", help="内容类型过滤")
     search_parser.add_argument("--source", default="all", help="来源过滤")
 
-    sub.add_parser("stats", help="查看索引状态")
-    sub.add_parser("topics", help="列出所有主题")
+    stats_parser = sub.add_parser("stats", help="查看索引状态")
+    stats_parser.add_argument("--config", default="config.yaml", help="配置文件路径")
+
+    topics_parser = sub.add_parser("topics", help="列出所有主题")
+    topics_parser.add_argument("--config", default="config.yaml", help="配置文件路径")
 
     args = parser.parse_args()
 
