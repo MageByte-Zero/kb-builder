@@ -1,0 +1,215 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>码哥字节 AI 知识库</title>
+
+  <!-- Fonts -->
+  <link rel="preconnect" href="https://fonts.googleapis.com">
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+  <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&family=JetBrains+Mono:wght@400;500;700&display=swap" rel="stylesheet">
+
+  <!-- Styles -->
+  <link rel="stylesheet" href="/static/style.css">
+
+  <!-- Alpine.js -->
+  <script defer src="https://cdn.jsdelivr.net/npm/alpinejs@3.x.x/dist/cdn.min.js"></script>
+
+  <!-- marked.js for Markdown -->
+  <script src="https://cdn.jsdelivr.net/npm/marked/marked.min.js"></script>
+
+  <!-- highlight.js for code blocks -->
+  <link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/highlight.js@11/styles/github-dark.min.css">
+  <script src="https://cdn.jsdelivr.net/npm/highlight.js@11/highlight.min.js"></script>
+</head>
+<body>
+
+<div x-data="kbApp" x-cloak class="app-layout">
+
+  <!-- Hamburger (mobile) -->
+  <button class="hamburger" @click="toggleSidebar()">
+    <svg xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 24 24" stroke="currentColor" stroke-width="2">
+      <path stroke-linecap="round" stroke-linejoin="round" d="M4 6h16M4 12h16M4 18h16"/>
+    </svg>
+  </button>
+
+  <!-- Sidebar overlay (mobile) -->
+  <div class="sidebar-overlay" :class="{ open: sidebarOpen }" @click="closeSidebar()"></div>
+
+  <!-- Sidebar -->
+  <aside class="sidebar" :class="{ open: sidebarOpen }">
+
+    <!-- Logo -->
+    <div class="sidebar-logo">
+      <span>码哥字节 AI 知识库</span>
+    </div>
+
+    <!-- Topics -->
+    <div class="sidebar-section">
+      <div class="sidebar-section-title">主题导航</div>
+      <ul class="topic-list">
+        <template x-for="(topic, i) in topics" :key="i">
+          <li class="topic-item"
+              :class="{ active: query === topicDisplayName(topic) }"
+              @click="clickTopic(topic)">
+            <span x-text="topicDisplayName(topic)"></span>
+            <span class="topic-count" x-show="topic.count" x-text="topic.count"></span>
+          </li>
+        </template>
+      </ul>
+      <div x-show="topics.length === 0" style="padding: 8px 12px; font-size: 0.8125rem; color: #475569;">
+        加载中...
+      </div>
+    </div>
+
+    <!-- Content Type Filter -->
+    <div class="sidebar-section">
+      <div class="sidebar-section-title">内容类型</div>
+      <div class="filter-group">
+        <label class="filter-label">
+          <input type="radio" name="content_type" value="" x-model="contentType" @change="searched && doSearch()">
+          <span>全部类型</span>
+        </label>
+        <label class="filter-label">
+          <input type="radio" name="content_type" value="article" x-model="contentType" @change="searched && doSearch()">
+          <span>文章</span>
+        </label>
+        <label class="filter-label">
+          <input type="radio" name="content_type" value="brief" x-model="contentType" @change="searched && doSearch()">
+          <span>简报</span>
+        </label>
+      </div>
+    </div>
+
+    <!-- Source Filter -->
+    <div class="sidebar-section" x-show="sources.length > 0">
+      <div class="sidebar-section-title">来源筛选</div>
+      <div class="filter-group">
+        <template x-for="(src, i) in sources" :key="i">
+          <label class="filter-label">
+            <input type="checkbox"
+                   :value="src.name || src"
+                   @change="sourceFilter = ($event.target.checked ? ($event.target.value) : ''); searched && doSearch()">
+            <span x-text="src.name || src"></span>
+          </label>
+        </template>
+      </div>
+    </div>
+
+  </aside>
+
+  <!-- Main Content -->
+  <main class="main-content">
+
+    <!-- Search Header -->
+    <header class="search-header">
+      <div class="search-bar">
+        <div class="search-input-wrap">
+          <svg xmlns="http://www.w3.org/2000/svg" width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+            <circle cx="11" cy="11" r="8"></circle>
+            <path d="m21 21-4.3-4.3"></path>
+          </svg>
+          <input type="text"
+                 class="search-input"
+                 placeholder="搜索知识库内容..."
+                 x-model="query"
+                 @keydown.enter="doSearch()">
+        </div>
+        <select class="search-type-select" x-model="contentType">
+          <option value="">全部类型</option>
+          <option value="article">文章</option>
+          <option value="brief">简报</option>
+        </select>
+        <button class="search-btn" @click="doSearch()" :disabled="loading || !query.trim()">
+          <span x-show="!loading">搜索</span>
+          <span x-show="loading">搜索中...</span>
+        </button>
+      </div>
+
+      <!-- Stats -->
+      <div class="stats-bar" x-show="stats">
+        <div class="stats-badge">
+          <span class="dot"></span>
+          <span>向量索引: <strong x-text="stats ? stats.total_vectors : '—'"></strong> 条</span>
+        </div>
+      </div>
+    </header>
+
+    <!-- Content Area -->
+    <div class="content-area">
+
+      <!-- Loading -->
+      <div class="loading-overlay" x-show="loading">
+        <div class="spinner"></div>
+        <span class="loading-text">正在搜索...</span>
+      </div>
+
+      <!-- Empty State -->
+      <div class="empty-state" x-show="!loading && !searched && !articleView">
+        <div class="empty-icon">📚</div>
+        <h2 class="empty-title">探索 AI 知识库</h2>
+        <p class="empty-desc">搜索后端技术、AI 工具、职场效率等主题文章，快速获取高质量技术内容。</p>
+        <div class="suggestion-chips">
+          <span class="suggestion-chip" @click="applySuggestion('Redis 缓存')">Redis 缓存</span>
+          <span class="suggestion-chip" @click="applySuggestion('Claude Code')">Claude Code</span>
+          <span class="suggestion-chip" @click="applySuggestion('JVM 调优')">JVM 调优</span>
+          <span class="suggestion-chip" @click="applySuggestion('MCP 协议')">MCP 协议</span>
+          <span class="suggestion-chip" @click="applySuggestion('Kafka 消息队列')">Kafka 消息队列</span>
+        </div>
+      </div>
+
+      <!-- Search Results -->
+      <div x-show="!loading && searched && !articleView">
+        <div class="results-header">
+          <span class="results-count" x-text="'找到 ' + results.length + ' 条结果'"></span>
+        </div>
+
+        <template x-for="(item, i) in results" :key="i">
+          <div class="result-card"
+               :style="animDelay(i)"
+               @click="viewArticle(item.path)">
+            <div class="result-top">
+              <span class="relevance-badge"
+                    :class="relevanceClass(item.score)"
+                    x-text="relevancePercent(item.score)"></span>
+              <span class="result-heading" x-text="item.heading || '无标题'"></span>
+            </div>
+            <div class="result-meta">
+              <span class="result-topic-tag" x-show="item.topic" x-text="item.topic"></span>
+              <span class="result-source" x-show="item.source_name" x-text="item.source_name"></span>
+            </div>
+            <p class="result-snippet" x-html="item.snippet"></p>
+          </div>
+        </template>
+
+        <div x-show="!loading && searched && results.length === 0" class="empty-state">
+          <div class="empty-icon">🔍</div>
+          <h2 class="empty-title">未找到匹配结果</h2>
+          <p class="empty-desc">尝试更换关键词或调整筛选条件。</p>
+        </div>
+      </div>
+
+      <!-- Article View -->
+      <div class="article-view" x-show="!loading && articleView">
+        <div class="article-back" @click="backToResults()">
+          <svg xmlns="http://www.w3.org/2000/svg" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+            <path d="m15 18-6-6 6-6"/>
+          </svg>
+          <span>返回搜索结果</span>
+        </div>
+        <div class="article-content">
+          <div id="article-body"></div>
+        </div>
+      </div>
+
+    </div>
+  </main>
+
+</div>
+
+<!-- App JS -->
+<script src="/static/app.js"></script>
+
+</body>
+</html>
