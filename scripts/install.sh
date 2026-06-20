@@ -176,43 +176,21 @@ fi
 echo ""
 echo -e "${CYAN}[6/6]${NC} 配置 Claude Code MCP..."
 
-SETTINGS_FILE="$HOME/.claude/settings.json"
 SERVER_PATH="$SKILL_DIR/mcp/kb_server.py"
+VENV_PYTHON="$SKILL_DIR/.venv/bin/python3"
+CONFIG_PATH="$SCRIPT_DIR/config.yaml"
 
-# 确保 settings.json 存在
-if [[ ! -f "$SETTINGS_FILE" ]]; then
-    mkdir -p "$(dirname "$SETTINGS_FILE")"
-    echo '{"mcpServers": {}}' > "$SETTINGS_FILE"
-fi
+# 先移除旧的（如果存在）
+claude mcp remove ai-knowledge-base -s local 2>/dev/null || true
 
-# 使用 Python 安全编辑 JSON
-python3 << PYEOF
-import json
+# 用 claude mcp add 注册（Claude Code 2.x 标准方式）
+claude mcp add ai-knowledge-base \
+  -e "KB_CONFIG_PATH=$CONFIG_PATH" \
+  -e "HF_ENDPOINT=https://hf-mirror.com" \
+  -s local \
+  -- "$VENV_PYTHON" "$SERVER_PATH" 2>&1
 
-settings_path = "$SETTINGS_FILE"
-server_path = "$SERVER_PATH"
-venv_python = "$SKILL_DIR/.venv/bin/python3"
-config_path = "$SCRIPT_DIR/config.yaml"
-
-with open(settings_path, 'r') as f:
-    settings = json.load(f)
-
-if 'mcpServers' not in settings:
-    settings['mcpServers'] = {}
-
-settings['mcpServers']['ai-knowledge-base'] = {
-    "command": venv_python,
-    "args": [server_path],
-    "env": {
-        "KB_CONFIG_PATH": config_path
-    }
-}
-
-with open(settings_path, 'w') as f:
-    json.dump(settings, f, indent=2, ensure_ascii=False)
-PYEOF
-
-echo -e "  ${GREEN}✓${NC} MCP 配置已写入 $SETTINGS_FILE"
+echo -e "  ${GREEN}✓${NC} MCP server 已注册（下次启动 Claude Code 生效）"
 
 # ── 完成 ──────────────────────────────────────────────────
 echo ""

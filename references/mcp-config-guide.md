@@ -14,27 +14,21 @@ MCP（Model Context Protocol）是 Claude Code 与外部工具通信的标准协
 
 1. 创建 Python 虚拟环境（`.venv`）并安装依赖
 2. 首次索引（下载 embedding 模型 ~500MB + 建立向量库）
-3. 在 `~/.claude/settings.json` 中添加 MCP 服务器配置
+3. 通过 `claude mcp add` 命令注册 MCP 服务器
 
-### 自动写入的配置
+### 自动执行的命令
 
-`install.sh` 会将以下配置写入 `~/.claude/settings.json`：
+`install.sh` 会自动执行：
 
-```json
-{
-  "mcpServers": {
-    "ai-knowledge-base": {
-      "command": "/path/to/kb-builder/.venv/bin/python3",
-      "args": ["/path/to/kb-builder/mcp/kb_server.py"],
-      "env": {
-        "KB_CONFIG_PATH": "/path/to/kb-builder/scripts/config.yaml"
-      }
-    }
-  }
-}
+```bash
+claude mcp add ai-knowledge-base \
+  -e "KB_CONFIG_PATH=/path/to/kb-builder/scripts/config.yaml" \
+  -e "HF_ENDPOINT=https://hf-mirror.com" \
+  -s local \
+  -- /path/to/kb-builder/.venv/bin/python3 /path/to/kb-builder/mcp/kb_server.py
 ```
 
-路径会自动替换为你的实际安装路径。
+路径会自动替换为你的实际安装路径。注册后重启 Claude Code 生效。
 
 ---
 
@@ -51,27 +45,23 @@ source .venv/bin/activate
 pip install -r requirements.txt
 ```
 
-### 第二步：编辑 Claude Code 设置
+### 第二步：注册 MCP 服务器
 
-打开 `~/.claude/settings.json`（如不存在则创建），在 `mcpServers` 对象中添加：
+使用 `claude mcp add` 命令（Claude Code 2.x 标准方式）：
 
-```json
-{
-  "mcpServers": {
-    "ai-knowledge-base": {
-      "command": "/完整路径/kb-builder/.venv/bin/python3",
-      "args": ["/完整路径/kb-builder/mcp/kb_server.py"],
-      "env": {
-        "KB_CONFIG_PATH": "/完整路径/kb-builder/scripts/config.yaml"
-      }
-    }
-  }
-}
+```bash
+claude mcp add ai-knowledge-base \
+  -e "KB_CONFIG_PATH=/完整路径/kb-builder/scripts/config.yaml" \
+  -e "HF_ENDPOINT=https://hf-mirror.com" \
+  -s local \
+  -- /完整路径/kb-builder/.venv/bin/python3 /完整路径/kb-builder/mcp/kb_server.py
 ```
 
 > **注意**：必须使用 `.venv/bin/python3`（虚拟环境中的 Python），而不是系统的 `python3`。所有依赖（chromadb、fastmcp 等）都安装在虚拟环境中。
 >
-> 如果你在 `~/.claude/settings.json` 中已经定义了其他 MCP 服务器，只需在 `mcpServers` 对象中添加 `ai-knowledge-base` 条目即可，不要删除其他配置。
+> `-s local` 表示注册为本地项目配置（仅当前项目可见）。如需全局生效，改为 `-s user`。
+>
+> `HF_ENDPOINT=https://hf-mirror.com` 用于加速 HuggingFace 模型下载（国内环境）。
 
 ### 第三步：重启 Claude Code
 
@@ -101,7 +91,7 @@ Claude 应调用 `get_kb_stats` 并返回向量数、内容源等信息。
 
 ### 方法三：检查 MCP 连接
 
-在 Claude Code 中输入 `/mcp`，查看列表中是否有 `ai-knowledge-base` 条目且状态正常。
+在终端中运行 `claude mcp list`，查看 `ai-knowledge-base` 是否显示 ✔ Connected。
 
 ### 方法四：手动测试服务器
 
@@ -121,7 +111,7 @@ Claude 应调用 `get_kb_stats` 并返回向量数、内容源等信息。
 
 ### 第一步：移除 MCP 配置
 
-编辑 `~/.claude/settings.json`，删除 `mcpServers` 中的 `ai-knowledge-base` 条目。
+运行 `claude mcp remove ai-knowledge-base -s local`（或 `-s user`，取决于注册时的 scope）。
 
 ### 第二步：重启 Claude Code
 
