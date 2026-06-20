@@ -187,7 +187,7 @@ claude mcp remove ai-knowledge-base -s local 2>/dev/null || true
 claude mcp add ai-knowledge-base \
   -e "KB_CONFIG_PATH=$CONFIG_PATH" \
   -e "HF_ENDPOINT=https://hf-mirror.com" \
-  -s local \
+  -s user \
   -- "$VENV_PYTHON" "$SERVER_PATH" 2>&1
 
 echo -e "  ${GREEN}✓${NC} MCP server 已注册（下次启动 Claude Code 生效）"
