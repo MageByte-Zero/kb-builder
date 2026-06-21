@@ -14,12 +14,16 @@ document.addEventListener('alpine:init', () => {
     articleContent: '',
     articleTitle: '',
     sidebarOpen: false,
+    showSourcePanel: false,
+    managedSources: [],
+    newSource: { name: '', type: '', url: '' },
 
     // Lifecycle
     async init() {
       await Promise.all([
         this.loadTopics(),
-        this.loadStats()
+        this.loadStats(),
+        this.loadManagedSources()
       ]);
     },
 
@@ -186,6 +190,103 @@ document.addEventListener('alpine:init', () => {
 
     animDelay(index) {
       return `animation-delay: ${index * 50}ms`;
+    },
+
+    // Source management
+    async loadManagedSources() {
+      try {
+        const res = await fetch('/api/sources');
+        if (res.ok) {
+          const data = await res.json();
+          this.managedSources = data.sources || [];
+        }
+      } catch (e) {
+        console.error('Failed to load sources:', e);
+      }
+    },
+
+    async addSource() {
+      const { name, type, url } = this.newSource;
+      if (!name || !type || !url) return;
+
+      try {
+        const res = await fetch('/api/sources', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ name, type, url })
+        });
+        if (res.ok) {
+          this.newSource = { name: '', type: '', url: '' };
+          await this.loadManagedSources();
+          this.pollSourceStatus();
+        } else {
+          const err = await res.json();
+          alert(err.detail?.error || '添加失败');
+        }
+      } catch (e) {
+        alert('网络错误: ' + e.message);
+      }
+    },
+
+    async deleteSource(id, name) {
+      if (!confirm(`确认删除「${name}」？本地文件也会被删除。`)) return;
+      try {
+        const res = await fetch(`/api/sources/${id}`, { method: 'DELETE' });
+        if (res.ok) await this.loadManagedSources();
+      } catch (e) {
+        alert('删除失败: ' + e.message);
+      }
+    },
+
+    async syncSource(id) {
+      try {
+        const res = await fetch(`/api/sources/${id}/sync`, { method: 'POST' });
+        if (res.ok) {
+          await this.loadManagedSources();
+          this.pollSourceStatus();
+        }
+      } catch (e) {
+        alert('同步失败: ' + e.message);
+      }
+    },
+
+    async toggleSource(id) {
+      try {
+        const res = await fetch(`/api/sources/${id}/toggle`, { method: 'PUT' });
+        if (res.ok) await this.loadManagedSources();
+      } catch (e) {
+        alert('操作失败: ' + e.message);
+      }
+    },
+
+    pollSourceStatus() {
+      const poll = setInterval(async () => {
+        await this.loadManagedSources();
+        const hasActive = this.managedSources.some(
+          s => s.status === 'syncing' || s.status === 'indexing'
+        );
+        if (!hasActive) {
+          clearInterval(poll);
+          this.loadTopics();
+          this.loadStats();
+        }
+      }, 3000);
+    },
+
+    statusText(src) {
+      const map = { pending: '等待中', syncing: '同步中...', indexing: '索引中...', ready: '就绪', error: '错误' };
+      return map[src.status] || src.status;
+    },
+
+    timeAgo(iso) {
+      if (!iso) return '';
+      const diff = Date.now() - new Date(iso).getTime();
+      const mins = Math.floor(diff / 60000);
+      if (mins < 1) return '刚刚';
+      if (mins < 60) return mins + ' 分钟前';
+      const hours = Math.floor(mins / 60);
+      if (hours < 24) return hours + ' 小时前';
+      return Math.floor(hours / 24) + ' 天前';
     }
   }));
 });

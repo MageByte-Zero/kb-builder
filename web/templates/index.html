@@ -13,13 +13,16 @@
   <!-- Styles -->
   <link rel="stylesheet" href="/static/style.css">
 
+  <!-- Alpine.js plugins (must load before core) -->
+  <script defer src="https://cdn.jsdelivr.net/npm/@alpinejs/collapse@3.x.x/dist/cdn.min.js"></script>
+
   <!-- Alpine.js -->
   <script defer src="https://cdn.jsdelivr.net/npm/alpinejs@3.x.x/dist/cdn.min.js"></script>
 
   <!-- marked.js for Markdown -->
   <script src="https://cdn.jsdelivr.net/npm/marked/marked.min.js"></script>
 
-  <!-- highlight.js for code blocks -->
+  <!-- highlight.js for code blocks (dark theme for dark code blocks) -->
   <link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/highlight.js@11/styles/github-dark.min.css">
   <script src="https://cdn.jsdelivr.net/npm/highlight.js@11/highlight.min.js"></script>
 </head>
@@ -94,6 +97,65 @@
             <span x-text="src.name || src"></span>
           </label>
         </template>
+      </div>
+    </div>
+
+    <!-- Source Management -->
+    <div class="sidebar-section source-mgmt">
+      <div class="sidebar-section-title">知识库来源</div>
+      <button class="source-toggle-btn" @click="showSourcePanel = !showSourcePanel">
+        <span x-text="showSourcePanel ? '收起管理' : '管理来源'"></span>
+        <span class="source-count" x-text="sources.length"></span>
+      </button>
+
+      <!-- Source List -->
+      <div x-show="showSourcePanel" x-collapse>
+        <ul class="source-list">
+          <template x-for="src in managedSources" :key="src.id">
+            <li class="source-item" :class="{'source-error': src.status === 'error'}">
+              <div class="source-item-top">
+                <span class="source-type-badge" x-text="src.type"></span>
+                <span class="source-name" x-text="src.name"></span>
+                <span class="source-status" :class="'status-' + src.status"
+                      x-text="statusText(src)"></span>
+              </div>
+              <div class="source-item-url" x-text="src.url" :title="src.url"></div>
+              <div class="source-item-meta">
+                <span x-show="src.chunk_count" x-text="src.chunk_count + ' chunks'"></span>
+                <span x-show="src.last_synced" x-text="'同步: ' + timeAgo(src.last_synced)"></span>
+              </div>
+              <div class="source-item-error" x-show="src.error_message" x-text="src.error_message"></div>
+              <div class="source-item-actions">
+                <button class="source-action-btn" @click="syncSource(src.id)"
+                        :disabled="src.status === 'syncing' || src.status === 'indexing'">
+                  同步
+                </button>
+                <button class="source-action-btn" @click="toggleSource(src.id)">
+                  <span x-text="src.enabled ? '禁用' : '启用'"></span>
+                </button>
+                <button class="source-action-btn source-action-danger" @click="deleteSource(src.id, src.name)">
+                  删除
+                </button>
+              </div>
+            </li>
+          </template>
+        </ul>
+
+        <!-- Add Source Form -->
+        <div class="source-add-form">
+          <input class="source-input" x-model="newSource.name" placeholder="名称 (如 my-docs)" />
+          <select class="source-input" x-model="newSource.type">
+            <option value="">选择类型</option>
+            <option value="git">Git 仓库</option>
+            <option value="docs">在线文档</option>
+            <option value="rss">RSS/Atom</option>
+          </select>
+          <input class="source-input" x-model="newSource.url" placeholder="URL 地址" />
+          <button class="source-add-btn" @click="addSource()"
+                  :disabled="!newSource.name || !newSource.type || !newSource.url">
+            添加并索引
+          </button>
+        </div>
       </div>
     </div>
 
