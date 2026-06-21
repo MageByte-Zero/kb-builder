@@ -221,7 +221,7 @@ document.addEventListener('alpine:init', () => {
           this.pollSourceStatus();
         } else {
           const err = await res.json();
-          alert(err.detail?.error || '添加失败');
+          alert(err.error || '添加失败');
         }
       } catch (e) {
         alert('网络错误: ' + e.message);

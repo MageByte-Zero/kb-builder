@@ -155,23 +155,24 @@ kb-builder/
 
 ## 6. 视觉风格
 
-**配色（深色科技感）：**
-- 主背景：`#0a0a0f`
-- 卡片背景：`#12121a`
-- 主色调：渐变 `#6366f1 → #8b5cf6`（紫蓝）
-- 正文文字：`#e2e8f0`
-- 次要文字：`#94a3b8`
-- 相关度：>85% 绿 `#22c55e` / 70-85% 黄 `#eab308` / <70% 灰 `#64748b`
-- 边框：`rgba(255,255,255,0.06)`
+**配色（极简白 — Notion/Linear 风）：**
+- 主背景：`#f8f9fb`
+- 侧边栏/卡片：`#ffffff`
+- 主色调：`#2563eb`（蓝）
+- 正文文字：`#1a1a2e`
+- 次要文字：`#6b7280`
+- 相关度：>85% 绿 `#15803d` / 70-85% 黄 `#a16207` / <70% 灰 `#6b7280`
+- 边框：`#e5e7eb`
+- 代码块：深色底 `#1e1e2e`（保持可读性）
 
 **字体：**
-- 正文：Inter（Google Fonts CDN）
-- 代码：JetBrains Mono（Google Fonts CDN）
+- 正文：-apple-system, Inter, Noto Sans SC（系统字体优先）
+- 代码：JetBrains Mono, SF Mono
 
 **动画：**
 - 卡片出场：fadeInUp，依次延迟 50ms
-- 侧边栏 hover：左侧渐变条滑入
-- 全文展开：slide 过渡 200ms
+- 侧边栏 hover：背景 `#f3f4f6` 过渡
+- 搜索框 focus：蓝色边框 + 轻阴影
 
 ## 7. 依赖变更
 
@@ -184,7 +185,139 @@ jinja2>=3.1.0
 
 `install.sh` 新增：安装上述依赖。
 
-## 8. 不做的事（v2.0 scope out）
+## 8. 动态知识库来源管理（v2.1 新增）
+
+### 8.1 目标
+
+支持从 Web UI 动态接入多种知识库来源，不再依赖手动编辑 `config.yaml`。
+
+**支持的来源类型：**
+
+| 类型 | 输入示例 | 行为 |
+|------|----------|------|
+| Git 仓库 | `https://github.com/user/repo.git` | clone → 索引所有 .md |
+| 在线文档站 | `https://docs.example.com` | 抓取页面 → 转 Markdown → 索引 |
+| 本地上传 | 拖拽 .md 文件 / .zip 包 | 解压 → 索引 |
+| RSS/Atom | `https://blog.example.com/feed.xml` | 拉取条目 → 索引 |
+
+### 8.2 数据模型
+
+来源元数据持久化到 `scripts/sources.json`（替代直接编辑 config.yaml 中的 content_sources）：
+
+```json
+{
+  "sources": [
+    {
+      "id": "src_a1b2c3",
+      "name": "awesome-ai-kb",
+      "type": "git",
+      "url": "https://github.com/MageByte-Zero/awesome-ai-kb.git",
+      "local_path": "~/.kb-builder/sources/awesome-ai-kb",
+      "enabled": true,
+      "status": "ready",
+      "last_synced": "2026-06-20T15:30:00Z",
+      "chunk_count": 1240,
+      "created_at": "2026-06-20T10:00:00Z"
+    }
+  ]
+}
+```
+
+**status 枚举：** `pending` | `syncing` | `indexing` | `ready` | `error`
+
+### 8.3 API 新增接口
+
+| 方法 | 路径 | 说明 |
+|------|------|------|
+| GET | `/api/sources` | 列出所有来源 |
+| POST | `/api/sources` | 添加新来源（body: `{name, type, url}`) |
+| DELETE | `/api/sources/{id}` | 删除来源（可选删本地文件） |
+| POST | `/api/sources/{id}/sync` | 重新同步+索引 |
+| PUT | `/api/sources/{id}/toggle` | 启用/禁用 |
+
+**POST /api/sources 返回：**
+```json
+{
+  "id": "src_a1b2c3",
+  "name": "awesome-ai-kb",
+  "type": "git",
+  "status": "syncing",
+  "message": "正在克隆仓库..."
+}
+```
+
+### 8.4 前端 UI
+
+在侧边栏底部增加「知识库来源」管理入口，点击展开管理面板：
+
+```
+┌──────────────────────────────────────────────────────────────┐
+│  知识库来源管理                                    [+ 添加来源] │
+├──────────────────────────────────────────────────────────────┤
+│  ┌─────────────────────────────────────────────────────────┐ │
+│  │ 📦 awesome-ai-kb          [git]  ✅ 就绪  1240 chunks   │ │
+│  │    github.com/MageByte-Zero/awesome-ai-kb               │ │
+│  │    上次同步: 2 小时前            [同步] [删除]             │ │
+│  ├─────────────────────────────────────────────────────────┤ │
+│  │ 📚 rust-book              [docs] ⏳ 同步中...            │ │
+│  │    doc.rust-lang.org/book                                │ │
+│  │                                 [取消] [删除]             │ │
+│  └─────────────────────────────────────────────────────────┘ │
+│                                                              │
+│  添加新来源:                                                  │
+│  ┌─────────────────────────────────────────────────────────┐ │
+│  │ 名称: [my-docs        ]  类型: [Git 仓库 ▾]              │ │
+│  │ URL:  [https://github.com/user/repo.git              ]  │ │
+│  │                                    [添加并索引]           │ │
+│  └─────────────────────────────────────────────────────────┘ │
+└──────────────────────────────────────────────────────────────┘
+```
+
+### 8.5 源适配器设计
+
+每种来源类型实现统一接口：
+
+```python
+class SourceAdapter(ABC):
+    @abstractmethod
+    def fetch(self, url: str, dest: Path) -> Path:
+        """拉取内容到本地目录，返回 .md 文件根目录"""
+
+    @abstractmethod
+    def validate_url(self, url: str) -> bool:
+        """校验 URL 格式是否合法"""
+```
+
+**适配器实现：**
+- `GitAdapter` — `git clone` / `git pull`，返回仓库根目录
+- `DocsAdapter` — 用 `requests` + `BeautifulSoup` 抓取页面，`markdownify` 转 .md
+- `RssAdapter` — `feedparser` 解析 feed，每条目存为独立 .md
+
+**本地上传**不走适配器，直接保存到 `~/.kb-builder/sources/{id}/`。
+
+### 8.6 目录约定
+
+```
+~/.kb-builder/
+├── sources/              # 所有克隆/下载的来源内容
+│   ├── src_a1b2c3/       # 按 source id 隔离
+│   └── src_d4e5f6/
+└── chroma_db/            # 向量库（现有）
+```
+
+`scripts/config.yaml` 中的 `content_sources` 保留向后兼容，系统启动时合并 `sources.json` + `config.yaml` 中的来源。
+
+### 8.7 依赖变更
+
+`requirements.txt` 新增：
+```
+httpx>=0.27.0
+beautifulsoup4>=4.12.0
+markdownify>=0.13.0
+feedparser>=6.0.0
+```
+
+## 9. 不做的事（v2.0 scope out）
 
 - 用户登录/鉴权
 - 键盘快捷键
@@ -192,3 +325,4 @@ jinja2>=3.1.0
 - 收藏/书签
 - 移动端 App
 - Docker 部署配置
+- 定时自动同步（后续版本）

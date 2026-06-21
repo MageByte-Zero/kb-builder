@@ -4,6 +4,7 @@
 import asyncio
 import os
 import sys
+from datetime import datetime, timezone
 from pathlib import Path
 
 # 确保能 import scripts/index.py
@@ -349,7 +350,8 @@ async def _sync_source(source_id: str):
             all_chunks.extend(chunks)
 
         written = indexer.index_documents(all_chunks, src.name, content_type)
-        sm.update(source_id, status="ready", chunk_count=written)
+        sm.update(source_id, status="ready", chunk_count=written,
+                  last_synced=datetime.now(timezone.utc).isoformat())
 
     except Exception as e:
         sm.update(source_id, status="error", error_message=str(e)[:500])

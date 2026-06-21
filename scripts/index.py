@@ -378,7 +378,7 @@ class RAGIndexer:
         full=True 时先清空 collection 再重建。"""
         sources = self.get_merged_sources()
         if not sources:
-            print("[ERROR] config.yaml 中未声明任何 content_sources")
+            print("[ERROR] 未找到任何可用的内容来源（检查 config.yaml 和 sources.json）")
             return None
 
         # 全量重建：删除旧 collection 再创建
