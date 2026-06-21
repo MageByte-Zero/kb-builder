@@ -348,10 +348,35 @@ class RAGIndexer:
             total += (end - i)
         return total
 
+    def get_merged_sources(self, source_manager=None) -> list:
+        """合并 sources.json 和 config.yaml 中的来源（去重）"""
+        sources = list(self.config.get("content_sources", []))
+
+        if source_manager is None:
+            try:
+                from sources.manager import SourceManager
+                source_manager = SourceManager()
+            except ImportError:
+                return sources
+
+        for src in source_manager.list():
+            if not src.enabled or src.status != "ready":
+                continue
+            # 去重：检查 local_path 是否已在 config 中
+            if any(s.get("path") == src.local_path for s in sources):
+                continue
+            sources.append({
+                "name": src.name,
+                "path": src.local_path,
+                "enabled": True,
+            })
+
+        return sources
+
     def index_all(self, full: bool = False):
-        """遍历 config 中的所有内容源，执行索引。
+        """遍历所有来源（config + sources.json），执行索引。
         full=True 时先清空 collection 再重建。"""
-        sources = self.config.get("content_sources", [])
+        sources = self.get_merged_sources()
         if not sources:
             print("[ERROR] config.yaml 中未声明任何 content_sources")
             return None
