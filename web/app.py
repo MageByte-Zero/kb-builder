@@ -1,6 +1,7 @@
 #!/usr/bin/env python3
 """KB Builder Web UI — FastAPI 应用"""
 
+import asyncio
 import os
 import sys
 from pathlib import Path
@@ -8,15 +9,25 @@ from pathlib import Path
 # 确保能 import scripts/index.py
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent / "scripts"))
 
-from fastapi import FastAPI, Query, HTTPException, Request
+from fastapi import FastAPI, Query, Request
 from fastapi.middleware.cors import CORSMiddleware
-from fastapi.responses import HTMLResponse, FileResponse
+from fastapi.responses import HTMLResponse, FileResponse, JSONResponse
 from fastapi.staticfiles import StaticFiles
 from fastapi.templating import Jinja2Templates
 
 from index import RAGIndexer, load_config, ConfigError
 from sources.manager import SourceManager
 from sources.adapters import GitAdapter, DocsAdapter, RssAdapter
+
+
+# ── Custom error class ──────────────────────────────────────────
+
+class APIError(Exception):
+    """统一错误响应：{"error": "message", "status_code": N}"""
+
+    def __init__(self, message: str, status_code: int = 400):
+        self.message = message
+        self.status_code = status_code
 
 # ── 项目根目录（web.py 的父目录 = web/ 的父目录）──────────────────
 PROJECT_ROOT = Path(__file__).resolve().parent.parent
@@ -51,6 +62,15 @@ def get_indexer() -> RAGIndexer:
 # ── FastAPI App ─────────────────────────────────────────────────
 
 app = FastAPI(title="KB Builder Web UI", version="1.0.0")
+
+
+@app.exception_handler(APIError)
+async def api_error_handler(_request: Request, exc: APIError):
+    return JSONResponse(
+        status_code=exc.status_code,
+        content={"error": exc.message, "status_code": exc.status_code},
+    )
+
 
 # CORS — 开发阶段允许所有来源
 app.add_middleware(
@@ -174,9 +194,9 @@ async def api_article(path: str = Query(..., description="文章 .md 文件路�
 
     # 安全校验：必须是 .md 文件且存在
     if not file_path.exists():
-        raise HTTPException(status_code=404, detail={"error": f"文件不存在: {path}"})
+        raise APIError(f"文件不存在: {path}", status_code=404)
     if file_path.suffix.lower() != ".md":
-        raise HTTPException(status_code=400, detail={"error": "仅支持 .md 文件"})
+        raise APIError("仅支持 .md 文件")
 
     try:
         content = file_path.read_text(encoding="utf-8")
@@ -184,10 +204,7 @@ async def api_article(path: str = Query(..., description="文章 .md 文件路�
         try:
             content = file_path.read_text(encoding="gbk")
         except Exception:
-            raise HTTPException(
-                status_code=500,
-                detail={"error": f"无法读取文件（编码不支持）: {path}"},
-            )
+            raise APIError(f"无法读取文件（编码不支持）: {path}", status_code=500)
 
     # 提取第一个标题作为 title
     import re
@@ -223,27 +240,36 @@ async def list_sources():
 @app.post("/api/sources")
 async def add_source(request: Request):
     """添加新来源"""
-    body = await request.json()
+    try:
+        body = await request.json()
+    except Exception:
+        raise APIError("请求体 JSON 解析失败", status_code=400)
+
     name = body.get("name", "").strip()
     source_type = body.get("type", "").strip()
     url = body.get("url", "").strip()
 
     if not name or not source_type or not url:
-        raise HTTPException(status_code=400, detail={"error": "name, type, url 均为必填"})
+        raise APIError("name, type, url 均为必填")
 
     adapter_cls = ADAPTERS.get(source_type)
     if not adapter_cls:
-        raise HTTPException(status_code=400, detail={"error": f"不支持的类型: {source_type}，可选: {list(ADAPTERS.keys())}"})
+        raise APIError(f"不支持的类型: {source_type}，可选: {list(ADAPTERS.keys())}")
 
     adapter = adapter_cls()
     if not adapter.validate_url(url):
-        raise HTTPException(status_code=400, detail={"error": "URL 格式不合法"})
+        raise APIError("URL 格式不合法")
 
     sm = get_source_manager()
+
+    # 检查 URL 是否已存在
+    for s in sm.list():
+        if s.url == url:
+            raise APIError(f"URL 已存在（来源: {s.name}）", status_code=409)
+
     src = sm.add(name=name, source_type=source_type, url=url)
 
     # 后台异步执行 fetch + index
-    import asyncio
     asyncio.create_task(_sync_source(src.id))
 
     return {
@@ -257,7 +283,7 @@ async def delete_source(source_id: str, remove_files: bool = True):
     """删除来源"""
     sm = get_source_manager()
     if not sm.delete(source_id, remove_files=remove_files):
-        raise HTTPException(status_code=404, detail={"error": "来源不存在"})
+        raise APIError("来源不存在", status_code=404)
     return {"message": "已删除"}
 
 
@@ -267,9 +293,11 @@ async def sync_source(source_id: str):
     sm = get_source_manager()
     src = sm.get(source_id)
     if not src:
-        raise HTTPException(status_code=404, detail={"error": "来源不存在"})
+        raise APIError("来源不存在", status_code=404)
 
-    import asyncio
+    if src.status in ("syncing", "indexing"):
+        raise APIError("来源正在同步中，请稍后再试", status_code=409)
+
     asyncio.create_task(_sync_source(source_id))
 
     return {"message": "正在同步...", "status": "syncing"}
@@ -281,13 +309,12 @@ async def toggle_source(source_id: str):
     sm = get_source_manager()
     src = sm.toggle(source_id)
     if not src:
-        raise HTTPException(status_code=404, detail={"error": "来源不存在"})
+        raise APIError("来源不存在", status_code=404)
     return {"id": src.id, "enabled": src.enabled, "status": src.status}
 
 
 async def _sync_source(source_id: str):
     """后台任务：fetch → index"""
-    import asyncio
     sm = get_source_manager()
     src = sm.get(source_id)
     if not src:
@@ -304,7 +331,7 @@ async def _sync_source(source_id: str):
     try:
         sm.update(source_id, status="syncing", error_message="")
         # fetch 在线程池中执行（避免阻塞事件循环）
-        loop = asyncio.get_event_loop()
+        loop = asyncio.get_running_loop()
         await loop.run_in_executor(None, adapter.fetch, src.url, dest)
         sm.update(source_id, status="indexing")
 
