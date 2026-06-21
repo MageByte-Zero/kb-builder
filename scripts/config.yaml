@@ -6,6 +6,10 @@ content_sources:
     name: magebyte-ai-kb
     enabled: true
 
+  - path: /Users/magebte/Documents/magebyte/kb-builder/private/articles
+    name: magebyte-articles
+    enabled: true
+
 index:
   collection_name: unified_kb
   persist_dir: ./chroma_db

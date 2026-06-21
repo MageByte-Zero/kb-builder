@@ -18,3 +18,6 @@ Thumbs.db
 .vscode/
 *.swp
 *.swo
+
+# Private content (not for open source)
+private/
