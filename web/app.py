@@ -3,16 +3,19 @@
 
 import asyncio
 import os
+import re
 import sys
 from datetime import datetime, timezone
 from pathlib import Path
+from urllib.parse import urlparse, quote
 
 # 确保能 import scripts/index.py
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent / "scripts"))
 
+import httpx
 from fastapi import FastAPI, Query, Request
 from fastapi.middleware.cors import CORSMiddleware
-from fastapi.responses import HTMLResponse, FileResponse, JSONResponse
+from fastapi.responses import HTMLResponse, FileResponse, JSONResponse, Response
 from fastapi.staticfiles import StaticFiles
 from fastapi.templating import Jinja2Templates
 
@@ -173,6 +176,29 @@ async def api_stats():
     return stats
 
 
+# 需要代理的外部图片域名
+_PROXY_IMAGE_HOSTS = {
+    "magebyte.oss-cn-shenzhen.aliyuncs.com",
+    "files.mdnice.com",
+}
+
+
+def _rewrite_image_urls(markdown: str) -> str:
+    """将 markdown 中的外部图片 URL 重写为本地代理地址"""
+    def _replace(match):
+        url = match.group(1)
+        try:
+            parsed = urlparse(url)
+            if parsed.hostname in _PROXY_IMAGE_HOSTS:
+                return f"](/api/proxy/image?url={quote(url, safe='')})"
+        except Exception:
+            pass
+        return match.group(0)  # 不替换
+
+    # 匹配 markdown 图片语法 ![...](url) 中的 (url) 部分
+    return re.sub(r'\]\((https?://[^\s)]+)\)', _replace, markdown)
+
+
 @app.get("/api/article")
 async def api_article(path: str = Query(..., description="文章 .md 文件路径")):
     """读取并返回单篇文章内容"""
@@ -208,15 +234,68 @@ async def api_article(path: str = Query(..., description="文章 .md 文件路�
             raise APIError(f"无法读取文件（编码不支持）: {path}", status_code=500)
 
     # 提取第一个标题作为 title
-    import re
     match = re.search(r"^#\s+(.+)$", content, re.MULTILINE)
     title = match.group(1).strip() if match else file_path.stem
+
+    # 重写外部图片 URL → 本地代理（绕过 OSS 防盗链）
+    content = _rewrite_image_urls(content)
 
     return {
         "title": title,
         "content": content,
         "path": str(file_path),
     }
+
+
+# ── Image Proxy（绕过 OSS 防盗链）─────────────────────────────────
+
+# 允许代理的域名白名单
+IMAGE_PROXY_ALLOWED_HOSTS = {
+    "magebyte.oss-cn-shenzhen.aliyuncs.com",
+    "files.mdnice.com",
+}
+
+# HTTP 客户端单例（连接池复用）
+_http_client: httpx.AsyncClient | None = None
+
+def _get_http_client() -> httpx.AsyncClient:
+    global _http_client
+    if _http_client is None or _http_client.is_closed:
+        _http_client = httpx.AsyncClient(
+            timeout=15.0,
+            follow_redirects=True,
+            headers={"Referer": ""},  # 不发送 Referer，绕过防盗链
+        )
+    return _http_client
+
+
+@app.get("/api/proxy/image")
+async def proxy_image(url: str = Query(..., description="图片 URL")):
+    """代理外部图片请求，绕过 OSS 防盗链 Referer 限制"""
+    parsed = urlparse(url)
+    if parsed.scheme not in ("http", "https"):
+        raise APIError("仅支持 http/https 协议")
+    if parsed.hostname not in IMAGE_PROXY_ALLOWED_HOSTS:
+        raise APIError(f"域名不在白名单: {parsed.hostname}", status_code=403)
+
+    client = _get_http_client()
+    try:
+        resp = await client.get(url)
+        resp.raise_for_status()
+    except httpx.HTTPStatusError as e:
+        raise APIError(f"上游返回 {e.response.status_code}", status_code=502)
+    except httpx.RequestError as e:
+        raise APIError(f"请求失败: {str(e)[:200]}", status_code=502)
+
+    content_type = resp.headers.get("Content-Type", "image/png")
+    return Response(
+        content=resp.content,
+        media_type=content_type,
+        headers={
+            "Cache-Control": "public, max-age=86400",
+            "Access-Control-Allow-Origin": "*",
+        },
+    )
 
 
 # ── Source Management API ─────────────────────────────────────

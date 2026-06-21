@@ -2,7 +2,7 @@
 # 编辑此文件声明你的内容源
 
 content_sources:
-  - path: /Users/magebte/Documents/GitHub/awesome-ai-kb
+  - path: /Users/magebte/Documents/magebyte/awesome-ai-kb
     name: magebyte-ai-kb
     enabled: true
 

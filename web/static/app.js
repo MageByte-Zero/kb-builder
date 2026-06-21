@@ -134,7 +134,21 @@ document.addEventListener('alpine:init', () => {
             hljs.highlightElement(block);
           });
         }
+        // 代理外部图片（绕过 OSS 防盗链）
+        this.proxyExternalImages(el);
       }
+    },
+
+    proxyExternalImages(container) {
+      const PROXY_HOSTS = ['magebyte.oss-cn-shenzhen.aliyuncs.com', 'files.mdnice.com'];
+      container.querySelectorAll('img').forEach(img => {
+        try {
+          const u = new URL(img.src);
+          if (PROXY_HOSTS.includes(u.hostname)) {
+            img.src = '/api/proxy/image?url=' + encodeURIComponent(img.src);
+          }
+        } catch (_) { /* relative or invalid URL — skip */ }
+      });
     },
 
     backToResults() {
