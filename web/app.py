@@ -15,6 +15,8 @@ from fastapi.staticfiles import StaticFiles
 from fastapi.templating import Jinja2Templates
 
 from index import RAGIndexer, load_config, ConfigError
+from sources.manager import SourceManager
+from sources.adapters import GitAdapter, DocsAdapter, RssAdapter
 
 # ── 项目根目录（web.py 的父目录 = web/ 的父目录）──────────────────
 PROJECT_ROOT = Path(__file__).resolve().parent.parent
@@ -68,6 +70,30 @@ app.mount("/static", StaticFiles(directory=str(STATIC_DIR)), name="static")
 TEMPLATES_DIR = Path(__file__).parent / "templates"
 TEMPLATES_DIR.mkdir(parents=True, exist_ok=True)
 templates = Jinja2Templates(directory=str(TEMPLATES_DIR))
+
+
+# ── Source Manager Singleton ──────────────────────────────────
+_source_manager: SourceManager | None = None
+
+
+def get_source_manager() -> SourceManager:
+    global _source_manager
+    if _source_manager is None:
+        cfg_path = os.environ.get(
+            "KB_CONFIG_PATH",
+            str(PROJECT_ROOT / "scripts" / "config.yaml"),
+        )
+        sources_dir = os.path.expanduser("~/.kb-builder/sources")
+        db_path = str(Path(cfg_path).parent / "sources.json")
+        _source_manager = SourceManager(sources_dir=sources_dir, db_path=db_path)
+    return _source_manager
+
+
+ADAPTERS = {
+    "git": GitAdapter,
+    "docs": DocsAdapter,
+    "rss": RssAdapter,
+}
 
 
 # ── Routes ──────────────────────────────────────────────────────
@@ -173,3 +199,130 @@ async def api_article(path: str = Query(..., description="文章 .md 文件路�
         "content": content,
         "path": str(file_path),
     }
+
+
+# ── Source Management API ─────────────────────────────────────
+
+@app.get("/api/sources")
+async def list_sources():
+    """列出所有知识库来源"""
+    sm = get_source_manager()
+    sources = sm.list()
+    return {"sources": [
+        {
+            "id": s.id, "name": s.name, "type": s.type, "url": s.url,
+            "enabled": s.enabled, "status": s.status,
+            "error_message": s.error_message,
+            "last_synced": s.last_synced, "chunk_count": s.chunk_count,
+            "created_at": s.created_at,
+        }
+        for s in sources
+    ]}
+
+
+@app.post("/api/sources")
+async def add_source(request: Request):
+    """添加新来源"""
+    body = await request.json()
+    name = body.get("name", "").strip()
+    source_type = body.get("type", "").strip()
+    url = body.get("url", "").strip()
+
+    if not name or not source_type or not url:
+        raise HTTPException(status_code=400, detail={"error": "name, type, url 均为必填"})
+
+    adapter_cls = ADAPTERS.get(source_type)
+    if not adapter_cls:
+        raise HTTPException(status_code=400, detail={"error": f"不支持的类型: {source_type}，可选: {list(ADAPTERS.keys())}"})
+
+    adapter = adapter_cls()
+    if not adapter.validate_url(url):
+        raise HTTPException(status_code=400, detail={"error": "URL 格式不合法"})
+
+    sm = get_source_manager()
+    src = sm.add(name=name, source_type=source_type, url=url)
+
+    # 后台异步执行 fetch + index
+    import asyncio
+    asyncio.create_task(_sync_source(src.id))
+
+    return {
+        "id": src.id, "name": src.name, "type": src.type,
+        "status": src.status, "message": "已添加，正在后台同步...",
+    }
+
+
+@app.delete("/api/sources/{source_id}")
+async def delete_source(source_id: str, remove_files: bool = True):
+    """删除来源"""
+    sm = get_source_manager()
+    if not sm.delete(source_id, remove_files=remove_files):
+        raise HTTPException(status_code=404, detail={"error": "来源不存在"})
+    return {"message": "已删除"}
+
+
+@app.post("/api/sources/{source_id}/sync")
+async def sync_source(source_id: str):
+    """重新同步+索引"""
+    sm = get_source_manager()
+    src = sm.get(source_id)
+    if not src:
+        raise HTTPException(status_code=404, detail={"error": "来源不存在"})
+
+    import asyncio
+    asyncio.create_task(_sync_source(source_id))
+
+    return {"message": "正在同步...", "status": "syncing"}
+
+
+@app.put("/api/sources/{source_id}/toggle")
+async def toggle_source(source_id: str):
+    """启用/禁用来源"""
+    sm = get_source_manager()
+    src = sm.toggle(source_id)
+    if not src:
+        raise HTTPException(status_code=404, detail={"error": "来源不存在"})
+    return {"id": src.id, "enabled": src.enabled, "status": src.status}
+
+
+async def _sync_source(source_id: str):
+    """后台任务：fetch → index"""
+    import asyncio
+    sm = get_source_manager()
+    src = sm.get(source_id)
+    if not src:
+        return
+
+    adapter_cls = ADAPTERS.get(src.type)
+    if not adapter_cls:
+        sm.update(source_id, status="error", error_message=f"未知类型: {src.type}")
+        return
+
+    adapter = adapter_cls()
+    dest = Path(src.local_path)
+
+    try:
+        sm.update(source_id, status="syncing", error_message="")
+        # fetch 在线程池中执行（避免阻塞事件循环）
+        loop = asyncio.get_event_loop()
+        await loop.run_in_executor(None, adapter.fetch, src.url, dest)
+        sm.update(source_id, status="indexing")
+
+        # 索引
+        indexer = get_indexer()
+        from index import load_markdown_files, chunk_document, _determine_content_type
+        docs = load_markdown_files(str(dest))
+        content_type = _determine_content_type(str(dest))
+        chunking = indexer.config.get("chunking", {})
+        max_size = chunking.get("brief_max_size", 600) if content_type == "brief" else chunking.get("article_max_size", 800)
+
+        all_chunks = []
+        for doc in docs:
+            chunks = chunk_document(doc, content_type, max_size=max_size)
+            all_chunks.extend(chunks)
+
+        written = indexer.index_documents(all_chunks, src.name, content_type)
+        sm.update(source_id, status="ready", chunk_count=written)
+
+    except Exception as e:
+        sm.update(source_id, status="error", error_message=str(e)[:500])
