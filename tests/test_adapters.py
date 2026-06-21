@@ -168,3 +168,29 @@ def test_safe_filename():
     assert adapter._safe_filename("Hello World") == "Hello_World"
     assert adapter._safe_filename('file<>:"/\\name') == "file______name"
     assert adapter._safe_filename("") == "page"
+
+
+# -- DocsAdapter.fetch --------------------------------------------------------
+
+
+def test_fetch_writes_markdown_to_dest():
+    """fetch 应将 HTML 页面转换为 .md 文件写入 dest"""
+    html = (
+        "<html><head><title>Test Page</title></head>"
+        "<body><article><h1>Hello</h1><p>World</p></article></body></html>"
+    )
+    mock_response = MagicMock()
+    mock_response.text = html
+    mock_response.status_code = 200
+
+    adapter = DocsAdapter()
+    with tempfile.TemporaryDirectory() as tmp:
+        dest = Path(tmp) / "docs"
+        with patch("scripts.sources.adapters.httpx.get", return_value=mock_response):
+            result = adapter.fetch("https://example.com/docs", dest)
+            assert result == dest
+            md_files = list(dest.glob("*.md"))
+            assert len(md_files) >= 1
+            content = md_files[0].read_text(encoding="utf-8")
+            assert "Test Page" in content
+            assert "Hello" in content

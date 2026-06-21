@@ -4,6 +4,11 @@ import re
 import subprocess
 from abc import ABC, abstractmethod
 from pathlib import Path
+from urllib.parse import urljoin, urlparse
+
+import httpx
+from bs4 import BeautifulSoup
+from markdownify import markdownify as md
 
 
 class SourceAdapter(ABC):
@@ -62,10 +67,6 @@ class DocsAdapter(SourceAdapter):
 
     def fetch(self, url: str, dest: Path) -> Path:
         """抓取文档站首页及子页面，转为 .md 保存到 dest"""
-        import httpx
-        from bs4 import BeautifulSoup
-        from markdownify import markdownify as md
-
         dest.mkdir(parents=True, exist_ok=True)
         url = url.strip().rstrip("/")
 
@@ -101,10 +102,6 @@ class DocsAdapter(SourceAdapter):
 
     def _crawl_sidebar_links(self, soup, base_url: str, dest: Path, max_pages: int = 50):
         """从侧边栏提取子页面链接并抓取"""
-        import httpx
-        from urllib.parse import urljoin
-        from markdownify import markdownify as md
-
         # 常见侧边栏选择器
         nav = (
             soup.select_one("nav")
@@ -118,6 +115,7 @@ class DocsAdapter(SourceAdapter):
         links = nav.find_all("a", href=True)
         visited = set()
         count = 0
+        base_netloc = urlparse(base_url).netloc
 
         for link in links:
             if count >= max_pages:
@@ -126,7 +124,7 @@ class DocsAdapter(SourceAdapter):
             full_url = urljoin(base_url, href)
 
             # 只抓同域页面
-            if not full_url.startswith(base_url.split("/")[0] + "//" + base_url.split("//")[1].split("/")[0]):
+            if urlparse(full_url).netloc != base_netloc:
                 continue
             if full_url in visited or "#" in href:
                 continue
@@ -149,7 +147,8 @@ class DocsAdapter(SourceAdapter):
                     sub_file = dest / f"{self._safe_filename(sub_title)}.md"
                     sub_file.write_text(f"# {sub_title}\n\n{sub_md}", encoding="utf-8")
                     count += 1
-            except Exception:
+            except Exception as e:
+                print(f"[WARN] 抓取子页面失败 {full_url}: {e}")
                 continue
 
     @staticmethod
