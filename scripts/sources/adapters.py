@@ -157,3 +157,55 @@ class DocsAdapter(SourceAdapter):
         safe = re.sub(r'[<>:"/\\|?*\x00-\x1f]', '_', name)
         safe = safe.strip('. ')
         return (safe[:80] or "page").replace(' ', '_')
+
+
+class RssAdapter(SourceAdapter):
+    """RSS/Atom Feed 适配器"""
+
+    def validate_url(self, url: str) -> bool:
+        url = url.strip().lower()
+        return (url.startswith("http://") or url.startswith("https://")) and (
+            "feed" in url or "rss" in url or "atom" in url or url.endswith(".xml")
+        )
+
+    def fetch(self, url: str, dest: Path) -> Path:
+        """拉取 RSS/Atom feed，每个条目存为独立 .md"""
+        import feedparser
+
+        dest.mkdir(parents=True, exist_ok=True)
+
+        feed = feedparser.parse(url.strip())
+        if feed.bozo and not feed.entries:
+            raise RuntimeError(f"RSS 解析失败: {feed.bozo_exception}")
+
+        for i, entry in enumerate(feed.entries):
+            title = entry.get("title", f"entry_{i}")
+            content = ""
+            if entry.get("content"):
+                content = entry["content"][0].get("value", "")
+            elif entry.get("summary"):
+                content = entry["summary"]
+            elif entry.get("description"):
+                content = entry["description"]
+
+            link = entry.get("link", "")
+            published = entry.get("published", "")
+
+            safe_name = self._safe_filename(title)
+            file_path = dest / f"{safe_name}.md"
+
+            header = f"# {title}\n"
+            if link:
+                header += f"\n> 原文: {link}\n"
+            if published:
+                header += f"> 发布: {published}\n"
+
+            file_path.write_text(f"{header}\n{content}", encoding="utf-8")
+
+        return dest
+
+    @staticmethod
+    def _safe_filename(name: str) -> str:
+        safe = re.sub(r'[<>:"/\\|?*\x00-\x1f]', '_', name)
+        safe = safe.strip('. ')
+        return (safe[:80] or "entry").replace(' ', '_')

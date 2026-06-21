@@ -6,7 +6,7 @@ from unittest.mock import MagicMock, patch
 
 import pytest
 
-from scripts.sources.adapters import DocsAdapter, GitAdapter, SourceAdapter
+from scripts.sources.adapters import DocsAdapter, GitAdapter, RssAdapter, SourceAdapter
 
 
 # -- SourceAdapter ABC --------------------------------------------------------
@@ -194,3 +194,136 @@ def test_fetch_writes_markdown_to_dest():
             content = md_files[0].read_text(encoding="utf-8")
             assert "Test Page" in content
             assert "Hello" in content
+
+
+# -- RssAdapter.validate_url --------------------------------------------------
+
+
+def test_validate_rss_url():
+    adapter = RssAdapter()
+    assert adapter.validate_url("https://blog.example.com/feed.xml") is True
+    assert adapter.validate_url("https://example.com/rss") is True
+    assert adapter.validate_url("https://example.com/atom.xml") is True
+    assert adapter.validate_url("https://example.com/page.html") is False
+    assert adapter.validate_url("") is False
+
+
+def test_validate_rss_url_edge_cases():
+    adapter = RssAdapter()
+    assert adapter.validate_url("http://example.com/feed") is True
+    assert adapter.validate_url("https://example.com/data.xml") is True
+    assert adapter.validate_url("https://example.com/atom") is True
+    assert adapter.validate_url("ftp://example.com/feed.xml") is False
+    assert adapter.validate_url("  https://example.com/rss  ") is True
+
+
+# -- RssAdapter._safe_filename ------------------------------------------------
+
+
+def test_rss_safe_filename():
+    assert RssAdapter._safe_filename("Hello World") == "Hello_World"
+    assert RssAdapter._safe_filename('file<>:"/\\name') == "file______name"
+    assert RssAdapter._safe_filename("") == "entry"
+    assert RssAdapter._safe_filename("  . ") == "entry"
+
+
+# -- RssAdapter.fetch ---------------------------------------------------------
+
+
+def test_fetch_rss_writes_markdown_files():
+    """fetch 应将 RSS 条目写入独立 .md 文件"""
+    mock_feed = MagicMock()
+    mock_feed.bozo = False
+    mock_feed.entries = [
+        {
+            "title": "First Post",
+            "content": [{"value": "<p>Hello World</p>"}],
+            "link": "https://example.com/first",
+            "published": "2025-01-01",
+        },
+        {
+            "title": "Second Post",
+            "summary": "Summary text",
+            "link": "https://example.com/second",
+            "published": "2025-01-02",
+        },
+    ]
+
+    adapter = RssAdapter()
+    with tempfile.TemporaryDirectory() as tmp:
+        dest = Path(tmp) / "rss"
+        with patch("feedparser.parse", return_value=mock_feed):
+            result = adapter.fetch("https://example.com/feed.xml", dest)
+            assert result == dest
+            md_files = sorted(dest.glob("*.md"))
+            assert len(md_files) == 2
+            content0 = md_files[0].read_text(encoding="utf-8")
+            assert "# First Post" in content0
+            assert "Hello World" in content0
+            assert "原文: https://example.com/first" in content0
+            content1 = md_files[1].read_text(encoding="utf-8")
+            assert "# Second Post" in content1
+            assert "Summary text" in content1
+
+
+def test_fetch_rss_creates_dest_directory():
+    """fetch 应自动创建 dest 目录"""
+    mock_feed = MagicMock()
+    mock_feed.bozo = False
+    mock_feed.entries = [{"title": "Test", "summary": "body"}]
+
+    adapter = RssAdapter()
+    with tempfile.TemporaryDirectory() as tmp:
+        dest = Path(tmp) / "nested" / "rss"
+        assert not dest.exists()
+        with patch("feedparser.parse", return_value=mock_feed):
+            adapter.fetch("https://example.com/feed.xml", dest)
+            assert dest.exists()
+
+
+def test_fetch_rss_raises_on_parse_error():
+    """bozo 且无条目时应抛出 RuntimeError"""
+    mock_feed = MagicMock()
+    mock_feed.bozo = True
+    mock_feed.entries = []
+    mock_feed.bozo_exception = Exception("malformed XML")
+
+    adapter = RssAdapter()
+    with tempfile.TemporaryDirectory() as tmp:
+        dest = Path(tmp) / "rss"
+        with patch("feedparser.parse", return_value=mock_feed):
+            with pytest.raises(RuntimeError, match="RSS 解析失败"):
+                adapter.fetch("https://example.com/bad.xml", dest)
+
+
+def test_fetch_rss_empty_feed():
+    """空条目列表应正常返回空目录"""
+    mock_feed = MagicMock()
+    mock_feed.bozo = False
+    mock_feed.entries = []
+
+    adapter = RssAdapter()
+    with tempfile.TemporaryDirectory() as tmp:
+        dest = Path(tmp) / "rss"
+        with patch("feedparser.parse", return_value=mock_feed):
+            result = adapter.fetch("https://example.com/empty.xml", dest)
+            assert result == dest
+            assert list(dest.glob("*.md")) == []
+
+
+def test_fetch_rss_uses_description_fallback():
+    """没有 content/summary 时应回退到 description"""
+    mock_feed = MagicMock()
+    mock_feed.bozo = False
+    mock_feed.entries = [
+        {"title": "Desc Entry", "description": "desc content"},
+    ]
+
+    adapter = RssAdapter()
+    with tempfile.TemporaryDirectory() as tmp:
+        dest = Path(tmp) / "rss"
+        with patch("feedparser.parse", return_value=mock_feed):
+            adapter.fetch("https://example.com/feed.xml", dest)
+            md_files = list(dest.glob("*.md"))
+            assert len(md_files) == 1
+            assert "desc content" in md_files[0].read_text(encoding="utf-8")
