@@ -6,7 +6,7 @@ from unittest.mock import MagicMock, patch
 
 import pytest
 
-from scripts.sources.adapters import GitAdapter, SourceAdapter
+from scripts.sources.adapters import DocsAdapter, GitAdapter, SourceAdapter
 
 
 # -- SourceAdapter ABC --------------------------------------------------------
@@ -147,3 +147,24 @@ def test_run_git_success_no_error():
     with patch("subprocess.run") as mock_run:
         mock_run.return_value = MagicMock(returncode=0, stderr="")
         GitAdapter._run_git(["git", "clone", "https://ok.url/repo.git"])
+
+
+# -- DocsAdapter.validate_url --------------------------------------------------
+
+
+def test_validate_docs_url():
+    adapter = DocsAdapter()
+    assert adapter.validate_url("https://docs.python.org/3/") is True
+    assert adapter.validate_url("http://example.com/docs") is True
+    assert adapter.validate_url("ftp://example.com") is False
+    assert adapter.validate_url("") is False
+
+
+# -- DocsAdapter._safe_filename ------------------------------------------------
+
+
+def test_safe_filename():
+    adapter = DocsAdapter()
+    assert adapter._safe_filename("Hello World") == "Hello_World"
+    assert adapter._safe_filename('file<>:"/\\name') == "file______name"
+    assert adapter._safe_filename("") == "page"
